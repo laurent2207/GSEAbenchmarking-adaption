@@ -1,0 +1,239 @@
+---
+title: "GSEABenchmarking-Copy"
+output: html_document
+
+Adapted from:
+title: "Analysis vignette for GSEA Benchmarking manuscript"
+author: Ludwig Geistlinger
+output:
+  BiocStyle::html_document:
+    toc: true
+    toc_depth: 2
+vignette: >
+  % \VignetteIndexEntry{GSEA Benchmarking manuscript analysis}
+  % \VignetteEngine{knitr::rmarkdown}
+---
+
+# Setup
+```{r packages}
+library(EnrichmentBrowser)
+library(GSEABenchmarkeR)
+library(ggpubr)
+```
+
+```{r cb.colors}
+cb.pink <- "#CC79A7"
+cb.darkred <- "#B42F32"
+cb.red <- "#D55E00"
+cb.lightred <- "#DF6747"
+cb.blue <- "#0072B2"
+cb.yellow <- "#F0E442"
+cb.green <- "#009E73"
+cb.lightblue <- "#56B4E9"
+cb.lightorange <- "#FAAC77"
+cb.orange <- "#E69F00"
+cb.darkorange <- "#F6893D"
+cb.lightgrey <- "#C9C9BD"
+cb.darkgrey <- "#878D92"
+```
+
+
+
+# Expression data sources
+## Microarray compendium
+```{r maComp}
+data.dir <- "data"
+ma.dir <- file.path(data.dir, "GEO2KEGG_preproc")
+geo2kegg <- loadEData(ma.dir)
+ma.ids <- names(geo2kegg)
+ma.ids
+```
+## RNA-seq compendium
+```{r rseqComp}
+rseq.dir <- file.path(data.dir, "TCGA_preproc")
+rseq.raw <- file.path(rseq.dir, "GSE62944_matched_limmavoom")
+rseq.vst <- file.path(rseq.dir, "GSE62944_matched_vst")
+rseq.tpm <- file.path(rseq.dir, "cTD_matched_tpm")
+tcga.raw <- loadEData(rseq.raw)
+tcga.vst <- loadEData(rseq.vst)
+tcga.tpm <- loadEData(rseq.tpm)
+rseq.ids <- names(tcga.raw)
+rseq.ids
+```
+
+# Gene sets
+## KEGG
+```{r keggGS}
+kegg.gs <- getGenesets(org="hsa", db="kegg")
+length(kegg.gs)
+(min.size <- EnrichmentBrowser::configEBrowser("GS.MIN.SIZE"))
+(max.size <- EnrichmentBrowser::configEBrowser("GS.MAX.SIZE"))
+ind <- (lengths(kegg.gs) >= min.size) & (lengths(kegg.gs) <= max.size)
+kegg.gs <- kegg.gs[ind]
+length(kegg.gs)
+MASS::truehist(lengths(kegg.gs), nbins=50) 
+```
+## GO
+```{r goGS}
+go.gs <- getGenesets(org="hsa", db="go", onto="BP")
+length(go.gs)
+ind <- (lengths(go.gs) >= min.size) & (lengths(go.gs) <= max.size)
+go.gs <- go.gs[ind]
+length(go.gs)
+MASS::truehist(lengths(go.gs), nbins=50)
+```
+
+
+
+# Enrichment methods
+```{r methods}
+ea.methods <- sbeaMethods()[1:10]
+```
+
+# Benchmarking
+## set dirs
+```{r resDir}
+res.dir <- file.path(data.dir, "results")
+geo.dir <- file.path(res.dir, "GEO2KEGG")
+
+data.dir <- system.file("extdata", package="GSEABenchmarkeR")
+
+kegg.dir <- file.path(geo.dir, "kegg/perm1k")
+go.dir <- file.path(geo.dir, "go_bp")
+
+tcga.dir <- file.path(res.dir, "TCGA")
+vst.dir <- file.path(tcga.dir, "GSE62944_matched_vst")
+rseq.kegg.dir <- file.path(vst.dir, "kegg")
+rseq.go.dir <- file.path(vst.dir, "gobp")
+```
+
+
+```{r malaRankings}
+mala.kegg.file <- file.path(data.dir, "malacards", "KEGG.rds")
+mala.go.file <- file.path(data.dir, "malacards", "GO_BP.rds")
+
+# read RDS files
+mala.kegg <- readRDS(mala.kegg.file)
+mala.go <- readRDS(mala.go.file)
+
+# show number of rows per disease malacards KEGG
+vapply(mala.kegg, nrow, integer(1))
+
+# show number of rows per disease malacards GO
+vapply(mala.go, nrow, integer(1))
+
+# optional
+#mala.kegg$ALZ
+#mala.kegg$BRCA
+```
+
+## Mapping between dataset ID and disease code
+```{r data2dis}
+d2d.file <- file.path(data.dir, "malacards", "GseId2Disease.txt")
+d2d.map <- readDataId2diseaseCodeMap(d2d.file)
+head(d2d.map)
+d2d.tcga <- rseq.ids
+names(d2d.tcga) <- rseq.ids
+```
+```{r readRankings}
+ma.kegg.ranks <- readResults(kegg.dir, ma.ids, 
+                                methods=ea.methods, type="ranking")
+ma.go.ranks <- readResults(go.dir, ma.ids,
+                                methods=ea.methods, type="ranking")
+lengths(ma.kegg.ranks)
+
+rseq.kegg.ranks <- readResults(rseq.kegg.dir, rseq.ids, 
+                                methods=ea.methods, type="ranking")
+rseq.go.ranks <- readResults(rseq.go.dir, rseq.ids, 
+                                methods=ea.methods, type="ranking")
+
+# optional
+#ma.kegg.ranks$ora[1:2]
+```
+
+### Here we can calculate the malacard scores! ###
+
+## Relevance score of a gene set ranking
+```{r evalRelevance}
+ma.kegg.ranks$ora$GSE1297
+obs.score <- evalRelevance(ma.kegg.ranks$ora$GSE1297, mala.kegg$ALZ)
+obs.score
+```
+## Theoretical optimum
+```{r compOpt}
+gs.names <- ma.kegg.ranks$ora$GSE1297$GENE.SET
+gs.ids <- substring(gs.names, 1, 8)
+opt.score <- compOpt(mala.kegg$ALZ, gs.ids)
+opt.score
+round(obs.score / opt.score * 100, digits=2)
+```
+
+## Random relevance score distribution
+```{r compRand}
+rand.scores <- compRand(mala.kegg$ALZ, gs.ids, perm=50)
+summary(rand.scores)
+(sum(rand.scores >= obs.score) + 1) / 51
+```
+
+
+# facetplot function
+```{r facetplot}
+facetplot <- function(ma.kegg, ma.go, rseq.kegg, rseq.go, 
+    ylab="% significant sets", vline=6.5, hline=NA, log=FALSE, orderf=median)
+{
+    l <- list(ma.kegg=ma.kegg, ma.go=ma.go, rseq.kegg=rseq.kegg, rseq.go=rseq.go)
+    df <- reshape2::melt(l)
+    gsc <- vapply(df$L1, function(x) unlist(strsplit(x,"\\."))[2], 
+                    character(1), USE.NAMES=FALSE)
+    df <- cbind(df, gsc=gsc)
+    df$gsc <- toupper(df$gsc)
+    df$gsc <- vapply(df$gsc, function(n) 
+                ifelse(n == "GO", paste(n, "BP", sep="-"), n), 
+                character(1), USE.NAMES=FALSE)
+    df$gsc <- factor(df$gsc, levels=c("KEGG", "GO-BP"))
+    colnames(df)[1:2] <- c("dataset", "method")
+    colnames(df)[4] <- "compendium"
+    df$compendium <- sub("ma.kegg", "GEO2KEGG microarray", df$compendium)
+    df$compendium <- sub("rseq.go", "TCGA RNA-seq", df$compendium)
+    df$compendium <- sub("rseq.kegg", "TCGA RNA-seq", df$compendium)
+    df$compendium <- sub("ma.go", "GEO2KEGG microarray", df$compendium)
+    df$method <- substring(df$method, 1, 7)
+    if(log) df$value <- log(df$value, base=10)
+    o <- sort(vapply(split(df$value, df$method), 
+                        orderf, numeric(1), na.rm=TRUE))
+    df$method <- factor(df$method, levels=names(o))
+    p <- ggboxplot(df, x = "method", y = "value", 
+        width = 0.8, ylab=ylab, xlab="", fill="method")
+    p <- ggpar(p, x.text.angle=45, palette = "simpsons", legend="none") 
+    if(!is.na(vline)) 
+        p <- p + geom_vline(xintercept=vline, linetype="dashed", color = cb.darkgrey)
+    if(!is.na(hline)) 
+        p <- p + geom_hline(yintercept=hline, linetype="dashed", color = cb.red)
+
+    facet(p, facet.by=c("compendium", "gsc"))    
+}    
+```
+
+## Cross-dataset relevance score distribution
+```{r evalAll, fig.width=6, fig.height=6}
+ma.kegg.rel.sets <- evalRelevance(ma.kegg.ranks, mala.kegg, d2d.map)
+ma.go.rel.sets <- evalRelevance(ma.go.ranks, mala.go, d2d.map)
+
+rseq.kegg.rel.sets <- evalRelevance(rseq.kegg.ranks, mala.kegg, d2d.tcga)
+rseq.go.rel.sets <- evalRelevance(rseq.go.ranks, mala.go, d2d.tcga)
+```
+
+# creation of facetplot
+```{r}
+# facetplot function
+facetplot(ma.kegg.rel.sets, ma.go.rel.sets, rseq.kegg.rel.sets, 
+    rseq.go.rel.sets, ylab="% optimal relevance score", vline=4.5)
+```
+
+
+
+
+
+
+
+
